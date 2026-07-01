@@ -21,7 +21,7 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
   font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif}
-#app{display:grid;grid-template-columns:300px 1fr 300px;grid-template-rows:auto 1fr;height:100vh}
+#app{display:grid;grid-template-columns:360px 1fr 300px;grid-template-rows:auto 1fr;height:100vh}
 header{grid-column:1/4;border-bottom:1px solid var(--line);background:var(--panel-2);
   padding:14px 22px;display:flex;align-items:baseline;gap:18px}
 header h1{font-size:calc(var(--base-size) * 1.364);font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin:0}
@@ -636,6 +636,21 @@ function updateImpactTotal(){
 let hsLayer=null;        // highlight circles for detected hotspots
 let lastHotspots=[];
 
+// Dominant state NAME for a hotspot, by impacted-weighted vote over its member
+// faults (same idea as the city vote). Members carry state_name from the pool.
+function hotspotStateName(h){
+  if(!h.members || !h.members.length) return '';
+  const votes=new Map();
+  for(const f of h.members){
+    const sn=f.state_name||'';
+    if(!sn) continue;
+    votes.set(sn,(votes.get(sn)||0)+impactedCustomers(f)+1);
+  }
+  let top='', w=-1;
+  for(const [sn,v] of votes){ if(v>w){ w=v; top=sn; } }
+  return top;
+}
+
 function renderHotspots(list){
   lastHotspots=list;
   const el=document.getElementById('hs-list');
@@ -645,7 +660,9 @@ function renderHotspots(list){
     return;
   }
   el.innerHTML=list.map(h=>{
-    const place=h.city ? h.city : `${h.lat.toFixed(2)}, ${h.lon.toFixed(2)}`;
+    const st=hotspotStateName(h);
+    const base=h.city ? h.city : `${h.lat.toFixed(2)}, ${h.lon.toFixed(2)}`;
+    const place=(h.city && st) ? `${h.city}, ${st}` : base;
     return `<div class="hs-row" data-rank="${h.rank}">
       <span class="hs-rank">${h.rank}</span>
       <span><span class="hs-city">${place}</span>
@@ -667,24 +684,53 @@ function drawHotspotCircles(list){
   if(!list.length) return;
   const radiusM=HOTSPOT_MILES*1609.34;
   const layers=list.map(h=>{
+    // brighter, "popping" catchment ring: hot accent, glowing double stroke
+    const glow=L.circle([h.lat,h.lon],{
+      radius:radiusM, pane:'choroPane',
+      color:'#FF6B35', weight:6, opacity:.28, fill:false, interactive:false,
+    });
     const c=L.circle([h.lat,h.lon],{
       radius:radiusM, pane:'choroPane',
-      color:'#FF6B35', weight:2, fillColor:'#FF6B35', fillOpacity:.08,
-      interactive:false,
+      color:'#FFB08A', weight:2.5, opacity:1,
+      fillColor:'#FF6B35', fillOpacity:.20, interactive:false,
     });
     const m=L.marker([h.lat,h.lon],{
       icon:L.divIcon({className:'hs-pin',
         html:`<div style="background:#FF6B35;color:#0a0e14;font-weight:700;
-          font-family:'IBM Plex Mono',monospace;border-radius:50%;width:1.6em;height:1.6em;
+          font-family:'IBM Plex Mono',monospace;border-radius:50%;width:1.7em;height:1.7em;
           display:flex;align-items:center;justify-content:center;
+          box-shadow:0 0 10px 2px rgba(255,107,53,.7);
           font-size:calc(var(--base-size) * 0.85);border:2px solid #0a0e14">${h.rank}</div>`,
         iconSize:[0,0]}),
       interactive:false,
     });
-    return L.layerGroup([c,m]);
+    return L.layerGroup([glow,c,m]);
   });
   hsLayer=L.layerGroup(layers).addTo(map);
 }
+
+// A query-zone ring: same bright treatment as a hotspot, drawn around the
+// centroid of the matched set so a query "marks its zone" like a hot spot.
+let queryRing=null;
+function drawQueryRing(rows){
+  if(queryRing){ map.removeLayer(queryRing); queryRing=null; }
+  if(!rows || !rows.length) return;
+  let latS=0,lonS=0;
+  for(const r of rows){ latS+=r.latitude; lonS+=r.longitude; }
+  const lat=latS/rows.length, lon=lonS/rows.length;
+  // radius = enclose the matched points (min ~50mi so small sets still read)
+  let maxM=HOTSPOT_MILES*1609.34;
+  for(const r of rows){
+    const d=map.distance([lat,lon],[r.latitude,r.longitude]);
+    if(d>maxM) maxM=d;
+  }
+  const glow=L.circle([lat,lon],{radius:maxM,pane:'choroPane',
+    color:'#FF6B35',weight:6,opacity:.28,fill:false,interactive:false});
+  const c=L.circle([lat,lon],{radius:maxM,pane:'choroPane',
+    color:'#FFB08A',weight:2.5,opacity:1,fillColor:'#FF6B35',fillOpacity:.12,interactive:false});
+  queryRing=L.layerGroup([glow,c]).addTo(map);
+}
+function clearQueryRing(){ if(queryRing){ map.removeLayer(queryRing); queryRing=null; } }
 
 function focusHotspot(rank){
   const h=lastHotspots.find(x=>x.rank===rank);
@@ -893,6 +939,9 @@ function onQueryResult({rows, ids, answer}){
     const b=L.latLngBounds(pts).pad(0.15);
     // stay within the current drill frame's max bounds; fitBounds clamps anyway
     map.fitBounds(b,{animate:true});
+    drawQueryRing(rows);
+  } else {
+    clearQueryRing();
   }
 }
 
@@ -903,6 +952,7 @@ function onQueryClear(){
   document.getElementById('q-chart').hidden=true;
   const ans=document.getElementById('q-answer'); if(ans) ans.hidden=true;
   hideActionPlan();
+  clearQueryRing();
   drawPoints();
   frameForView(true);
 }
@@ -944,7 +994,9 @@ function renderProse(text){
 
 async function openActionPlan(hotspot){
   if(!hotspot || !hotspot.members || !hotspot.members.length) return;
-  const place=hotspot.city || `${hotspot.lat.toFixed(2)}, ${hotspot.lon.toFixed(2)}`;
+  const st=hotspotStateName(hotspot);
+  const cityLabel=hotspot.city || `${hotspot.lat.toFixed(2)}, ${hotspot.lon.toFixed(2)}`;
+  const place=(hotspot.city && st) ? `${hotspot.city}, ${st}` : cityLabel;
 
   // 1) deterministic structure (code owns the numbers)
   const plan=buildActionPlan(hotspot.members, impactedCustomers);
@@ -953,8 +1005,10 @@ async function openActionPlan(hotspot){
   const ids=new Set(hotspot.members.map(f=>f.cell_global_id));
   queryIds=ids;
   document.getElementById('q-clear').hidden=false;
-  document.getElementById('q-chart').hidden=true;
+  // show the root-cause blend of this hotspot's towers (same bar as queries)
+  renderQueryChart(hotspot.members.map(f=>({fault_class:f.answer})));
   const ans=document.getElementById('q-answer'); if(ans) ans.hidden=true;
+  clearQueryRing();
   drawPoints();
   focusHotspot(hotspot.rank);
 
@@ -988,6 +1042,7 @@ function syncQueryDb(){
     const ch=document.getElementById('q-chart'); if(ch) ch.hidden=true;
     const ans=document.getElementById('q-answer'); if(ans) ans.hidden=true;
     hideActionPlan();
+    clearQueryRing();
   }
 }
 
