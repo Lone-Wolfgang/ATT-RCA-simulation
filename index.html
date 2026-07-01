@@ -957,6 +957,18 @@ function onQueryClear(){
   frameForView(true);
 }
 
+// Flush the prior query's overlay before a NEW query runs. Same as clear but
+// does NOT re-frame the map — the incoming query will set its own bounds. This
+// guarantees each query starts from an un-dimmed, un-ringed, residue-free state.
+function onQueryFlush(){
+  queryIds=null;
+  clearQueryRing();
+  hideActionPlan();
+  const ch=document.getElementById('q-chart'); if(ch) ch.hidden=true;
+  const ans=document.getElementById('q-answer'); if(ans) ans.hidden=true;
+  drawPoints();
+}
+
 // ---- Hot Spot Action Plan (deterministic structure + model prose) ----------
 function hideActionPlan(){
   const p=document.getElementById('q-plan'); if(p) p.hidden=true;
@@ -1062,6 +1074,7 @@ async function boot(){
     impacted: impactedCustomers,
     onResult: onQueryResult,
     onClear: onQueryClear,
+    onFlush: onQueryFlush,
   });
   document.getElementById('qp-close').onclick=onQueryClear;
   document.getElementById('splash').style.display='none';

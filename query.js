@@ -100,6 +100,11 @@ export function refreshQueryDb() {
 
 // Run a natural-language question: translate -> guard -> execute -> callback.
 async function runQuestion(question) {
+  // Flush any prior query's overlay (dimming, ring, chart, answer) before this
+  // one runs, so a new query always starts from a clean, unfiltered state — and
+  // a failed/empty query never leaves the previous highlight stuck.
+  if (cfg.onFlush) cfg.onFlush();
+
   setStatus("loading", "Translating…");
   hideSqlReveal();
 
@@ -126,8 +131,10 @@ async function runQuestion(question) {
   }
   lastSql = sql;
 
-  // Ensure the DB reflects the current fault set before querying.
-  if (!db) refreshQueryDb();
+  // Rebuild the DB fresh from the current live fault set on EVERY query, so no
+  // state from a prior query carries over. (Previously only built when absent,
+  // which meant the 2nd+ query ran against a stale DB.)
+  refreshQueryDb();
 
   let rows;
   try {
