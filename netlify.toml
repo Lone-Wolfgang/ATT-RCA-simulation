@@ -1,0 +1,14 @@
+# netlify.toml — deploy the static dashboard + the nl2sql function together.
+#
+# One-time setup in the Netlify UI:
+#   Site settings -> Environment variables -> add ANTHROPIC_API_KEY = sk-ant-...
+# Then connect this repo; Netlify serves the root statically and exposes the
+# function at /.netlify/functions/nl2sql (same origin, so no CORS needed).
+
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# No build step — the site is static files at the repo root.
+[build.environment]
+  NODE_VERSION = "20"
